@@ -1016,10 +1016,10 @@ class FixpointEngine final : public FixpointIteratorBase<
 
       switch (assign->value) {
       case TypesOptions::NUMBER:
-        current_state->set(assign->variable, NumberDomain(0));
+        current_state->set(&assign->variable, NumberDomain(0));
         break;
       case TypesOptions::POINTER:
-        current_state->set(assign->variable, PointerDomain(PointerClass(1)));
+        current_state->set(&assign->variable, PointerDomain(PointerClass(1)));
         break;
       default:
         throw std::runtime_error("unreachable");
@@ -1027,7 +1027,7 @@ class FixpointEngine final : public FixpointIteratorBase<
       }
       // current_state->set(assign->variable, assign->value);
     } else if (auto* add = dynamic_cast<Add*>(mnemonic)) {
-      current_state->set(add->dest, current_state->get(add->src));
+      current_state->set(&add->dest, current_state->get(&add->src));
     } else {
       throw std::runtime_error("unreachable");
     }
@@ -1041,3 +1041,55 @@ class FixpointEngine final : public FixpointIteratorBase<
 
 } // namespace typeChecking
 
+template <typename FixpointEngine>
+class MonotonicFixpointIteratorTypeCheckingTest : public ::testing::Test {};
+
+using TypeCheckingFixpoints = ::testing::Types<
+    typeChecking::FixpointEngine<sparta::WTOMonotonicFixpointIterator>,
+    typeChecking::FixpointEngine<sparta::MonotonicFixpointIterator>,
+    typeChecking::FixpointEngine<sparta::ParallelMonotonicFixpointIterator>>;
+TYPED_TEST_CASE(MonotonicFixpointIteratorTypeCheckingTest,
+                TypeCheckingFixpoints);
+
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program1) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set x: number
+   * bb2; ret
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+
+  std::string x = "x";
+
+  bb1->add(std::make_unique<Assignment>(x, TypesOptions::NUMBER));
+  bb1->add_successor(bb2);
+
+  program.set_entry(bb1);
+  program.set_exit(bb2);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+  /*
+  EXPECT_EQ(fp.get_exit_state_at(bb1).get(&x), IntegerSetAbstractDomain{1});
+  EXPECT_EQ(fp.get_exit_state_at(bb1).get(&y), IntegerSetAbstractDomain::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb2), fp.get_exit_state_at(bb1));
+  EXPECT_EQ(fp.get_exit_state_at(bb2).get(&x), IntegerSetAbstractDomain{1});
+  EXPECT_EQ(fp.get_exit_state_at(bb2).get(&y), IntegerSetAbstractDomain{2});
+
+  EXPECT_EQ(fp.get_entry_state_at(bb3), fp.get_exit_state_at(bb1));
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(&x), IntegerSetAbstractDomain{1});
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(&y), IntegerSetAbstractDomain{3});
+
+  EXPECT_EQ(fp.get_entry_state_at(bb4).get(&x), IntegerSetAbstractDomain{1});
+  EXPECT_EQ(fp.get_entry_state_at(bb4).get(&y),
+            (IntegerSetAbstractDomain{2, 3}));
+  EXPECT_EQ(fp.get_exit_state_at(bb4), fp.get_entry_state_at(bb4));
+  */
+}
