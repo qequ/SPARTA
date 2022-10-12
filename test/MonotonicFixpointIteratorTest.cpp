@@ -10,6 +10,7 @@
 #include "DisjointUnionAbstractDomain.h"
 #include "FiniteAbstractDomain.h"
 
+#include "HashedAbstractEnvironment.h"
 #include "HashedSetAbstractDomain.h"
 #include "PatriciaTreeMapAbstractEnvironment.h"
 #include "PatriciaTreeSet.h"
@@ -868,25 +869,95 @@ TYPED_TEST(MonotonicFixpointIteratorNumericalTest, program2) {
 namespace typeChecking {
 using namespace sparta;
 
+class PointerClass {
+ private:
+  int indirections;
+
+ public:
+  PointerClass(int indirections = 1) : indirections(indirections){};
+
+  /*
+  bool operator==(const PointerClass otherPointer) const = default;
+  */
+
+  friend std::ostream& operator<<(std::ostream& os, const PointerClass&) {
+    return os;
+  };
+
+  bool operator==(const PointerClass otherPointer) const {
+    return indirections == otherPointer.indirections;
+  };
+};
+
+using PointerDomain = ConstantAbstractDomain<PointerClass>;
+using NumberDomain = ConstantAbstractDomain<uint64_t>;
+using PointerNumberDomain =
+    DisjointUnionAbstractDomain<PointerDomain, NumberDomain>;
+
+using AbstractEnvironment =
+    HashedAbstractEnvironment<std::string, PointerNumberDomain>;
+
 enum class TypesOptions { NUMBER, POINTER };
 
 struct Mnemonic {
   Mnemonic() = default;
   virtual ~Mnemonic() = default;
+
+  virtual void analyze_mnemonic(AbstractEnvironment* hash) = 0;
+
+ private:
+  virtual void analyze_dest_number(AbstractEnvironment* hash) = 0;
+  virtual void analyze_dest_pointer(AbstractEnvironment* hash) = 0;
 };
 
 struct Assignment : public Mnemonic {
-  Assignment(std::string variable, TypesOptions value)
-      : variable(variable), value(value) {}
+  Assignment(std::string reg, TypesOptions value) : reg(reg), value(value) {}
 
-  std::string variable;
+  std::string reg;
   TypesOptions value;
+  void analyze_mnemonic(AbstractEnvironment* hash){};
+  void analyze_dest_number(AbstractEnvironment* hash){};
+  void analyze_dest_pointer(AbstractEnvironment* hash){};
+};
+
+struct Mov : public Mnemonic {
+  Mov(std::string src, std::string dest) : src(src), dest(dest) {}
+  std::string src;
+  std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash){};
+  void analyze_dest_pointer(AbstractEnvironment* hash){};
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    hash->set(dest, hash->get(src));
+  };
 };
 
 struct Add : public Mnemonic {
   Add(std::string src, std::string dest) : src(src), dest(dest) {}
   std::string src;
   std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash) {
+    if (!hash->get(src).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    }
+  };
+  void analyze_dest_pointer(AbstractEnvironment* hash) {
+    if (!hash->get(src).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    }
+  };
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    if (hash->get(dest).equals(NumberDomain(0))) {
+      // it's a number
+      analyze_dest_number(hash);
+    } else {
+      // it's a pointer
+      analyze_dest_pointer(hash);
+    };
+  }
 };
 
 class BasicBlock;
@@ -966,26 +1037,6 @@ class ProgramInterface {
   static NodeId target(const Graph&, const EdgeId& e) { return e->target; }
 };
 
-class PointerClass {
- private:
-  int indirections;
-
- public:
-  PointerClass(int indirections = 0) : indirections(indirections){};
-
-  bool operator==(const PointerClass otherPointer) const {
-    return indirections == otherPointer.indirections;
-  };
-};
-
-using PointerDomain = ConstantAbstractDomain<PointerClass>;
-using NumberDomain = ConstantAbstractDomain<uint64_t>;
-using PointerNumberDomain =
-    DisjointUnionAbstractDomain<PointerDomain, NumberDomain>;
-
-using AbstractEnvironment =
-    PatriciaTreeMapAbstractEnvironment<std::string, PointerNumberDomain>;
-
 template <template <typename GraphInterface, typename Domain, typename NodeHash>
           class FixpointIteratorBase>
 class FixpointEngine final : public FixpointIteratorBase<
@@ -1013,24 +1064,44 @@ class FixpointEngine final : public FixpointIteratorBase<
   void analyze_mnemonic(Mnemonic* mnemonic,
                         AbstractEnvironment* current_state) const {
     if (auto* assign = dynamic_cast<Assignment*>(mnemonic)) {
-
       switch (assign->value) {
       case TypesOptions::NUMBER:
-        current_state->set(&assign->variable, NumberDomain(0));
+        current_state->set(assign->reg, NumberDomain(0));
         break;
       case TypesOptions::POINTER:
-        current_state->set(&assign->variable, PointerDomain(PointerClass(1)));
+        current_state->set(assign->reg, PointerDomain(PointerClass()));
         break;
       default:
         throw std::runtime_error("unreachable");
         break;
       }
-      // current_state->set(assign->variable, assign->value);
-    } else if (auto* add = dynamic_cast<Add*>(mnemonic)) {
-      current_state->set(&add->dest, current_state->get(&add->src));
+
     } else {
-      throw std::runtime_error("unreachable");
+      mnemonic->analyze_mnemonic(current_state);
     }
+
+    /*
+
+      if (auto* assign = dynamic_cast<Assignment*>(mnemonic)) {
+
+        switch (assign->value) {
+        case TypesOptions::NUMBER:
+          current_state->set(assign->variable, NumberDomain(0));
+          break;
+        case TypesOptions::POINTER:
+          current_state->set(assign->variable, PointerDomain(PointerClass()));
+          break;
+        default:
+          throw std::runtime_error("unreachable");
+          break;
+        }
+        // current_state->set(assign->variable, assign->value);
+      } else if (auto* add = dynamic_cast<Add*>(mnemonic)) {
+        current_state->set(add->dest, current_state->get(add->src));
+      } else {
+        throw std::runtime_error("unreachable");
+      }
+    */
   }
 
   AbstractEnvironment analyze_edge(
@@ -1055,41 +1126,49 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program1) {
   using namespace typeChecking;
 
   /*
-   * bb1; # set x: number
-   * bb2; ret
+   * bb1; # set rax: number
+   * bb2; # set rbx: pointer
+   * bb3; mov rax rbx
+   * bb4; add rax rbx
+   * bb5; ret
+
    */
   Program program;
 
   BasicBlock* bb1 = program.create_block();
   BasicBlock* bb2 = program.create_block();
+  BasicBlock* bb3 = program.create_block();
+  BasicBlock* bb4 = program.create_block();
+  BasicBlock* bb5 = program.create_block();
 
-  std::string x = "x";
+  std::string rax = "rax";
+  std::string rbx = "rbx";
 
-  bb1->add(std::make_unique<Assignment>(x, TypesOptions::NUMBER));
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::NUMBER));
   bb1->add_successor(bb2);
 
+  bb2->add(std::make_unique<Assignment>(rbx, TypesOptions::POINTER));
+  bb2->add_successor(bb3);
+
+  bb3->add(std::make_unique<Mov>(rax, rbx));
+  bb3->add_successor(bb4);
+
+  bb4->add(std::make_unique<Add>(rax, rbx));
+  bb3->add_successor(bb5);
+
+
   program.set_entry(bb1);
-  program.set_exit(bb2);
+  program.set_exit(bb5);
 
   TypeParam fp(program);
   fp.run(AbstractEnvironment::top());
 
   EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
-  /*
-  EXPECT_EQ(fp.get_exit_state_at(bb1).get(&x), IntegerSetAbstractDomain{1});
-  EXPECT_EQ(fp.get_exit_state_at(bb1).get(&y), IntegerSetAbstractDomain::top());
 
-  EXPECT_EQ(fp.get_entry_state_at(bb2), fp.get_exit_state_at(bb1));
-  EXPECT_EQ(fp.get_exit_state_at(bb2).get(&x), IntegerSetAbstractDomain{1});
-  EXPECT_EQ(fp.get_exit_state_at(bb2).get(&y), IntegerSetAbstractDomain{2});
+  EXPECT_EQ(fp.get_entry_state_at(bb3).get(rbx), PointerDomain(PointerClass()));
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rax), NumberDomain(0));
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
 
-  EXPECT_EQ(fp.get_entry_state_at(bb3), fp.get_exit_state_at(bb1));
-  EXPECT_EQ(fp.get_exit_state_at(bb3).get(&x), IntegerSetAbstractDomain{1});
-  EXPECT_EQ(fp.get_exit_state_at(bb3).get(&y), IntegerSetAbstractDomain{3});
+  EXPECT_EQ(fp.get_exit_state_at(bb4).get(rbx), NumberDomain(0));
 
-  EXPECT_EQ(fp.get_entry_state_at(bb4).get(&x), IntegerSetAbstractDomain{1});
-  EXPECT_EQ(fp.get_entry_state_at(bb4).get(&y),
-            (IntegerSetAbstractDomain{2, 3}));
-  EXPECT_EQ(fp.get_exit_state_at(bb4), fp.get_entry_state_at(bb4));
-  */
 }
