@@ -989,6 +989,59 @@ struct Sub : public Mnemonic {
   }
 };
 
+struct Cmp : public Mnemonic {
+  Cmp(std::string src, std::string dest) : src(src), dest(dest) {}
+  std::string src;
+  std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash) {
+    if (!hash->get(src).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    }
+  };
+  void analyze_dest_pointer(AbstractEnvironment* hash) {
+    if (hash->get(src).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    }
+  };
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    if (hash->get(dest).equals(NumberDomain(0))) {
+      analyze_dest_number(hash);
+    } else {
+      analyze_dest_pointer(hash);
+    };
+  }
+};
+
+struct Mul : public Mnemonic {
+  Mul(std::string dest) : dest(dest) {}
+  std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash){};
+  void analyze_dest_pointer(AbstractEnvironment* hash){};
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    if (!hash->get(dest).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    };
+  };
+};
+
+struct Div : public Mnemonic {
+  Div(std::string dest) : dest(dest) {}
+  std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash){};
+  void analyze_dest_pointer(AbstractEnvironment* hash){};
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    if (!hash->get(dest).equals(NumberDomain(0))) {
+      throw std::runtime_error("type check error");
+    };
+  };
+};
+
 class BasicBlock;
 
 struct Edge final {
@@ -1283,4 +1336,101 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program3) {
   EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
 
   EXPECT_EQ(fp.get_exit_state_at(bb5).get(rcx), PointerDomain(PointerClass()));
+}
+
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program4) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set rax: pointer
+   * bb2; # set rbx: pointer
+   * bb3; cmp rax rbx
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+  BasicBlock* bb3 = program.create_block();
+
+  std::string rax = "rax";
+  std::string rbx = "rbx";
+
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::NUMBER));
+  bb1->add_successor(bb2);
+
+  bb2->add(std::make_unique<Assignment>(rbx, TypesOptions::NUMBER));
+  bb2->add_successor(bb3);
+
+  bb3->add(std::make_unique<Cmp>(rax, rbx));
+
+  program.set_entry(bb1);
+  program.set_exit(bb3);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
+}
+
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program5) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set rax: number
+   * bb2; mul rax
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+
+  std::string rax = "rax";
+
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::NUMBER));
+  bb1->add_successor(bb2);
+
+  bb2->add(std::make_unique<Mul>(rax));
+
+  program.set_entry(bb1);
+  program.set_exit(bb2);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_exit_state_at(bb2).get(rax), NumberDomain(0));
+}
+
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program6) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set rax: number
+   * bb2; div rax
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+
+  std::string rax = "rax";
+
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::NUMBER));
+  bb1->add_successor(bb2);
+
+  bb2->add(std::make_unique<Div>(rax));
+
+  program.set_entry(bb1);
+  program.set_exit(bb2);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_exit_state_at(bb2).get(rax), NumberDomain(0));
 }
