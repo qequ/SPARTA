@@ -961,6 +961,34 @@ struct Add : public Mnemonic {
   }
 };
 
+struct Sub : public Mnemonic {
+  Sub(std::string src, std::string dest) : src(src), dest(dest) {}
+  std::string src;
+  std::string dest;
+
+  void analyze_dest_number(AbstractEnvironment* hash) {
+    if (!hash->get(src).equals(NumberDomain(0))) {
+      // src is pointer
+      throw std::runtime_error("type check error");
+    }
+  };
+  void analyze_dest_pointer(AbstractEnvironment* hash) {
+    if (!hash->get(src).equals(NumberDomain(0))) {
+      hash->set(dest, NumberDomain(0));
+    }
+  };
+
+  void analyze_mnemonic(AbstractEnvironment* hash) {
+    if (hash->get(dest).equals(NumberDomain(0))) {
+      // it's a number
+      analyze_dest_number(hash);
+    } else {
+      // it's a pointer
+      analyze_dest_pointer(hash);
+    };
+  }
+};
+
 class BasicBlock;
 
 struct Edge final {
@@ -1157,7 +1185,6 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program1) {
   bb4->add(std::make_unique<Add>(rax, rbx));
   bb3->add_successor(bb5);
 
-
   program.set_entry(bb1);
   program.set_exit(bb5);
 
@@ -1171,9 +1198,7 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program1) {
   EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
 
   EXPECT_EQ(fp.get_exit_state_at(bb4).get(rbx), NumberDomain(0));
-
 }
-
 
 TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program2) {
   using namespace typeChecking;
@@ -1209,5 +1234,53 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program2) {
   EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
 
   EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), PointerDomain(PointerClass()));
+}
 
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program3) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set rax: pointer
+   * bb2; # set rbx: pointer
+   * bb3; sub rax rbx
+   * bb4; # set rcx: pointer
+   * bb5; sub rbx rcx
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+  BasicBlock* bb3 = program.create_block();
+  BasicBlock* bb4 = program.create_block();
+  BasicBlock* bb5 = program.create_block();
+
+  std::string rax = "rax";
+  std::string rbx = "rbx";
+  std::string rcx = "rcx";
+
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::POINTER));
+  bb1->add_successor(bb2);
+
+  bb2->add(std::make_unique<Assignment>(rbx, TypesOptions::POINTER));
+  bb2->add_successor(bb3);
+
+  bb3->add(std::make_unique<Sub>(rax, rbx));
+  bb3->add_successor(bb4);
+
+  bb4->add(std::make_unique<Assignment>(rcx, TypesOptions::POINTER));
+  bb4->add_successor(bb5);
+
+  bb5->add(std::make_unique<Sub>(rbx, rcx));
+
+  program.set_entry(bb1);
+  program.set_exit(bb5);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
+
+  EXPECT_EQ(fp.get_exit_state_at(bb5).get(rcx), PointerDomain(PointerClass()));
 }
