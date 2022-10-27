@@ -940,7 +940,8 @@ struct Add : public Mnemonic {
 
   void analyze_dest_number(AbstractEnvironment* hash) {
     if (!hash->get(src).equals(NumberDomain(0))) {
-      throw std::runtime_error("type check error");
+      // src is pointer
+      hash->set(dest, hash->get(src));
     }
   };
   void analyze_dest_pointer(AbstractEnvironment* hash) {
@@ -1170,5 +1171,43 @@ TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program1) {
   EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), NumberDomain(0));
 
   EXPECT_EQ(fp.get_exit_state_at(bb4).get(rbx), NumberDomain(0));
+
+}
+
+
+TYPED_TEST(MonotonicFixpointIteratorTypeCheckingTest, program2) {
+  using namespace typeChecking;
+
+  /*
+   * bb1; # set rax: pointer
+   * bb2; # set rbx: int
+   * bb3; add rax rbx
+   */
+  Program program;
+
+  BasicBlock* bb1 = program.create_block();
+  BasicBlock* bb2 = program.create_block();
+  BasicBlock* bb3 = program.create_block();
+
+  std::string rax = "rax";
+  std::string rbx = "rbx";
+
+  bb1->add(std::make_unique<Assignment>(rax, TypesOptions::POINTER));
+  bb1->add_successor(bb2);
+
+  bb2->add(std::make_unique<Assignment>(rbx, TypesOptions::NUMBER));
+  bb2->add_successor(bb3);
+
+  bb3->add(std::make_unique<Add>(rax, rbx));
+
+  program.set_entry(bb1);
+  program.set_exit(bb3);
+
+  TypeParam fp(program);
+  fp.run(AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_entry_state_at(bb1), AbstractEnvironment::top());
+
+  EXPECT_EQ(fp.get_exit_state_at(bb3).get(rbx), PointerDomain(PointerClass()));
 
 }
